@@ -1,0 +1,364 @@
+FUNCTION_BLOCK fbMainProgram
+TITLE = 'Main Program File'
+VERSION : '1.0'
+KNOW_HOW_PROTECT
+AUTHOR : 'RF Brand'
+//********************************************************************************************//
+VAR // Static variable declarations for this FB
+(* Conveyor station program instances *)
+    CONV1_1 : fbConveyor;   // Instances OF FBs. Instead of instance DBs these FB calls
+    CONV1_2 : fbConveyor;   // embed data inside this FB's instance DB, providing some
+    CONV1_3 : fbConveyor;   // encapsulation.
+    CONV1_4 : fbTTAdvanced;
+    CONV2_1 : fbConveyor;
+    CONV2_2 : fbConveyor;
+    CONV2_3 : fbConveyor;
+    CONV2_4 : fbConveyor;
+    CONV2_5 : fbConveyor;
+    CONV2_6 : fbConveyor;
+    CONV3_1 : fbConveyorBD;
+    CONV3_2 : fbTilting;//fbConveyorBD;
+    CONV3_3 : fbConveyorBD;
+    CONV3_4 : fbTTNew;
+    CONV3_5 : fbConveyorBD;
+    
+(* Other variables *)
+    VSD_OnDelay : SFB4; // Give VSDs time to start up after EStop
+    hmi_1_4_motor_on : BOOL;    // hmi animation help bits
+    hmi_1_4_home_vsd_f : BOOL;
+    hmi_1_4_pos1_vsd_f : BOOL;
+    hmi_1_4_home_rollers_fwd : BOOL;
+    hmi_1_4_home_rollers_rev : BOOL;
+    hmi_1_4_pos1_rollers_fwd : BOOL;
+    hmi_1_4_pos1_rollers_rev : BOOL;
+    hmi_1_4_home_PS1: BOOL;
+    hmi_1_4_home_PS2: BOOL;
+    hmi_1_4_pos1_PS1: BOOL;
+    hmi_1_4_pos1_PS2: BOOL;
+    hmi_3_1_motor_on : BOOL;
+    hmi_3_2_motor_on : BOOL;
+    hmi_3_3_motor_on : BOOL;
+    hmi_3_4_motor_on : BOOL;
+    hmi_3_4_home_vsd_f : BOOL;
+    hmi_3_4_pos1_vsd_f : BOOL;
+    hmi_3_4_home_rollers_fwd : BOOL;
+    hmi_3_4_home_rollers_rev : BOOL;
+    hmi_3_4_pos1_rollers_fwd : BOOL;
+    hmi_3_4_pos1_rollers_rev : BOOL;
+    hmi_3_4_home_PS1 : BOOL;
+    hmi_3_4_home_PS2 : BOOL;
+    hmi_3_4_pos1_PS1 : BOOL;
+    hmi_3_4_pos1_PS2 : BOOL;
+    hmi_3_4_home_PS1_bot : BOOL;
+    hmi_3_4_home_PS1_top : BOOL;
+    hmi_3_4_home_PS2_bot : BOOL;
+    hmi_3_4_home_PS2_top : BOOL;
+    hmi_3_4_pos1_PS1_bot : BOOL;
+    hmi_3_4_pos1_PS1_top : BOOL;
+    hmi_3_4_pos1_PS2_bot : BOOL;
+    hmi_3_4_pos1_PS2_top : BOOL;
+    hmi_3_5_motor_on : BOOL;
+    
+    tSens1 : SFB4; // this sensor prone to emf. provide filtering (debounce)
+    bDumpV_Delay : SFB5; // off delay on dump valve to reduce emf
+    overrideBehav : INT; // override the behaviour of 3.1 & 3.2 when unloading the whole line 3
+END_VAR
+BEGIN // Start of FB statements
+VSD_OnDelay(IN := iSysEStop_K, PT := t#3s); // Delay VSD alarms after estop reset
+
+(* Call each conveyor station program and link I/O Symbols as well as inter comms *)
+(* VARNAME  (   FB INPUT            := Input address/symbol,
+                ...                 :=  ...
+            );
+Output address/symbol               := FB OUTPUT;                                 *)
+
+(* Conveyor 1_1 *)
+CONV1_1     (   iButton_Go          := iConv1_1Go_S,
+                iButton_EStop       := iConv1_1EStop_S,
+                iEStop_Global       := NOT iSysEStop_K,
+                iPS                 := iConv1_1PS_S,
+                iVSD_Rollers_F      := VSD_OnDelay.Q AND NOT iConv1_1VSD_F, //inverted
+                iNeigh2             := CONV1_2.oNeigh1,
+                xLoadOn_Conveyor    := true
+            );
+qConv1_1Fwd                         := CONV1_1.oMotor_Rollers_Fwd;
+qConv1_1Light_Ind                   := CONV1_1.oLamp_Indication;
+
+(* Conveyor 1_2 *)
+CONV1_2     (   iButton_Go          := iConv1_2Go_S,
+                iButton_EStop       := iConv1_2EStop_S,
+                iEStop_Global       := NOT iSysEStop_K,
+                iPS                 := iConv1_2PS_S,
+                iVSD_Rollers_F      := VSD_OnDelay.Q AND NOT iConv1_2VSD_F,
+                iNeigh1             := CONV1_1.oNeigh2,
+                iNeigh2             := CONV1_3.oNeigh1
+            );
+qConv1_2Fwd := CONV1_2.oMotor_Rollers_Fwd;
+qConv1_2Light_Ind := CONV1_2.oLamp_Indication;
+
+(* Conveyor 1_3 *)
+CONV1_3     (   iButton_Go          := iConv1_3Go_S,
+                iButton_EStop       := iConv1_3EStop_S,
+                iEStop_Global       := NOT iSysEStop_K,
+                iPS                 := iConv1_3PS_S,
+                iVSD_Rollers_F      := VSD_OnDelay.Q AND NOT iConv1_3VSD_F,
+                iNeigh1             := CONV1_2.oNeigh2,
+                iNeigh2             := CONV1_4.oNeigh1
+            );
+qConv1_3Fwd := CONV1_3.oMotor_Rollers_Fwd;
+qConv1_3Light_Ind := CONV1_3.oLamp_Indication;
+
+(* Conveyor 1_4: fbTTAdvanced - Turntable before LeakTester *)
+CONV1_4     (   iButton_Go          := iConv1_4Go_S,
+                iButton_SideIn      := iLine3Unload,
+                iButton_SendDir     := iConv1_4SD_S,
+                iButton_EStop       := iConv1_4EStop_S,
+                iEStop_Global       := NOT iSysEStop_K,
+                iPS1                := iConv1_4PS1_S,
+                iPS2                := iConv1_4PS2_S,
+                iPSHome_Stop        := iConv1_4ProxHome_Stop,
+                iPSHome_Slow        := iConv1_4ProxHome_Slow,
+                iPSPos1_Slow        := iConv1_4ProxPos1_Slow,
+                iPSPos1_Stop        := iConv1_4ProxPos1_Stop,
+                iVSD_Rollers_F      := VSD_OnDelay.Q AND NOT iConv1_4VSD_F,
+                iVSD_TT_F           := VSD_OnDelay.Q AND NOT iConv1_4VSD_F_TT,
+                iNeigh1             := CONV1_3.oNeigh2,
+                iNeigh2             := CONV2_6.oNeigh2,
+                iNeigh4             := CONV3_5.oNeigh2,
+                iConv3ReadyRecv     := iLeakTReady_S
+            );
+qConv1_4Fwd := CONV1_4.oMotor_Rollers_Fwd;
+qConv1_4Rev := CONV1_4.oMotor_Rollers_Rev;
+qConv1_4Fwd_TT := CONV1_4.oMotor_TT_Fwd;
+qConv1_4Rev_TT := CONV1_4.oMotor_TT_Rev;
+//qConv1_4Fast_TT :=CONV1_4.oMotor_TT_Fast; // not used. fast mode on drive too fast
+qConv1_4Light_Ind := CONV1_4.oLamp_Indication;
+
+(* HMI Animation bits *)
+hmi_1_4_motor_on := CONV1_4.oMotor_Rollers_Fwd OR CONV1_4.oMotor_Rollers_Rev;
+hmi_1_4_home_vsd_f := CONV1_4.TT_Home AND CONV1_4.iVSD_Rollers_F;
+hmi_1_4_pos1_vsd_f := CONV1_4.TT_Pos1 AND CONV1_4.iVSD_Rollers_F;
+hmi_1_4_home_rollers_fwd := CONV1_4.TT_Home AND CONV1_4.oMotor_Rollers_Fwd;
+hmi_1_4_home_rollers_rev := CONV1_4.TT_Home AND CONV1_4.oMotor_Rollers_Rev;
+hmi_1_4_pos1_rollers_fwd := CONV1_4.TT_Pos1 AND CONV1_4.oMotor_Rollers_Fwd;
+hmi_1_4_pos1_rollers_rev := CONV1_4.TT_Pos1 AND CONV1_4.oMotor_Rollers_Rev;
+hmi_1_4_home_PS1 := CONV1_4.TT_Home AND CONV1_4.iPS1;
+hmi_1_4_home_PS2 := CONV1_4.TT_Home AND CONV1_4.iPS2;
+hmi_1_4_pos1_PS1 := CONV1_4.TT_Pos1 AND CONV1_4.iPS1;
+hmi_1_4_pos1_PS2 := CONV1_4.TT_Pos1 AND CONV1_4.iPS2;
+
+(* Conveyor 2_1 *)
+CONV2_1     (   iButton_Go          := iConv2_1Go_S,
+                iButton_EStop       := iConv2_1EStop_S,
+                iEStop_Global       := NOT iSysEStop_K,
+                iPS                 := NOT iConv2_1PS_S,
+                iVSD_Rollers_F      := VSD_OnDelay.Q AND NOT iConv2_1VSD_F,
+                iNeigh2             := CONV2_2.oNeigh1,
+                xLoadOn_Conveyor    := true
+            );
+qConv2_1Fwd := CONV2_1.oMotor_Rollers_Fwd;
+qConv2_1Light_Ind := CONV2_1.oLamp_Indication;
+
+(* Conveyor 2_2 *)
+CONV2_2     (   iEStop_Global       := NOT iSysEStop_K,
+                iPS                 := NOT iConv2_2PS_S,
+                iVSD_Rollers_F      := VSD_OnDelay.Q AND NOT iConv2_2VSD_F,
+                iNeigh1             := CONV2_1.oNeigh2,
+                iNeigh2             := CONV2_3.oNeigh1,
+                xConv_Behav         := 1
+            );
+qConv2_2Fwd := CONV2_2.oMotor_Rollers_Fwd;
+
+(* Conveyor 2_3 *)
+CONV2_3     (   iEStop_Global       := NOT iSysEStop_K,
+                iPS                 := NOT iConv2_3PS_S,
+                iVSD_Rollers_F      := VSD_OnDelay.Q AND NOT iConv2_3VSD_F,
+                iNeigh1             := CONV2_2.oNeigh2,
+                iNeigh2             := CONV2_4.oNeigh1,
+                xConv_Behav         := 1
+            );
+qConv2_3Fwd := CONV2_3.oMotor_Rollers_Fwd;
+
+(* Conveyor 2_4 *)
+CONV2_4     (   iEStop_Global       := NOT iSysEStop_K,
+                iPS                 := NOT iConv2_4PS_S,
+                iVSD_Rollers_F      := VSD_OnDelay.Q AND NOT iConv2_4VSD_F,
+                iNeigh1             := CONV2_3.oNeigh2,
+                iNeigh2             := CONV2_5.oNeigh1,
+                xConv_Behav         := 1
+            );
+qConv2_4Fwd := CONV2_4.oMotor_Rollers_Fwd;
+
+(* Conveyor 2_5 *)
+CONV2_5     (   iButton_Go          := iConv2_5Go_S,
+                iButton_EStop       := iConv2_5EStop_S,
+                iEStop_Global       := NOT iSysEStop_K,
+                iPS                 := NOT iConv2_5PS_S,
+                iVSD_Rollers_F      := VSD_OnDelay.Q AND NOT iConv2_5VSD_F,
+                iNeigh1             := CONV2_4.oNeigh2,
+                iNeigh2             := CONV2_6.oNeigh1
+            );
+qConv2_5Fwd := CONV2_5.oMotor_Rollers_Fwd;
+qConv2_5Light_Ind := CONV2_5.oLamp_Indication;
+
+(* Conveyor 2_6 *)
+CONV2_6     (   iEStop_Global       := NOT iSysEStop_K,
+                iPS                 := NOT iConv2_6PS_S,
+                iVSD_Rollers_F      := VSD_OnDelay.Q AND NOT iConv2_6VSD_F,
+                iNeigh1             := CONV2_5.oNeigh2,
+                iNeigh2             := CONV1_4.oNeigh2,
+                xConv_Behav         := 1
+            );
+qConv2_6Fwd := CONV2_6.oMotor_Rollers_Fwd;
+
+(******************************)
+(*  Override the behaviour
+    of 3.1&3.2 when unloading *)
+IF iLine3Unload THEN
+    overrideBehav := 1;
+ELSE
+    overrideBehav := 0;
+END_IF;
+(******************************)
+(* Conveyor 3_1 *)
+CONV3_1     (   iButton_Go          := iConv3_1Go_S,
+                iButton_DirSel      := true,
+                iButton_EStop       := iConv3_1EStop_S,
+                iEStop_Global       := NOT iSysEStop_K,
+                iPS1                := NOT iConv3_1PS1_S,
+                iPS2                := NOT iConv3_1PS2_S,
+                iVSD_Rollers_F      := VSD_OnDelay.Q AND NOT iConv3_1VSD_F,
+                iNeigh2             := CONV3_2.oNeigh1,
+                xConv_Behav         := overrideBehav
+            );
+qConv3_1Fwd := CONV3_1.oMotor_Rollers_Fwd;
+qConv3_1Rev := iConv3_1PS1_S AND CONV3_1.oMotor_Rollers_Rev; // interlock. Product must not fall off.
+qConv3_1Light_Ind := CONV3_1.oLamp_Indication;
+
+hmi_3_1_motor_on := CONV3_1.oMotor_Rollers_Fwd OR CONV3_1.oMotor_Rollers_Rev;
+
+tSens1(IN := iConv3_2Prox471, PT := t#250ms); // required. EMF feedback on this sensor gives false trues!
+(* Conveyor 3_2 *)
+CONV3_2     (   iButton_Go          := iConv3_2Go_S,
+                iButton_DirSel      := iConv3_2Dir_S OR iLine3Unload,   // Override
+                iButton_DirTilt     := iConv3_2DirTilt_S,
+                iButton_DHS         := iConv3_2DHS_S,
+                iButton_EStop       := iConv3_2EStop_S,
+                iEStop_Global       := NOT iSysEStop_K,
+                iPS                 := iConv3_2P5_Ret,
+                iObs1               := NOT iConv3_2PS1_S,
+                iObs2               := NOT iConv3_2PS2_S,
+                iVSD_Rollers_F      := VSD_OnDelay.Q AND NOT iConv3_2VSD_F,
+                iMotor_Hydr_Trip    := ihydraulopack_motor,
+                iSafeTrip           := true, // iConv3_2SC
+                iValve_Bot_Ret      := iConv3_2P5_Ext,
+                iValve_Bot_Ext      := iConv3_2P3_Ret,
+                iValve_Side_Ret     := iConv3_2P2_Ret,
+                iValve_Side_Ext     := iConv3_2P1_Ext,
+                iValve_Pis_Ret      := tSens1.Q,
+                iValve_Top_Ret      := iConv3_2P4_Ext,
+                iValve_Tilt_Ext     := iConv3_2Prox472,
+                iNeigh1             := CONV3_1.oNeigh2,
+                iNeigh2             := CONV3_3.oNeigh1,
+                xConv_Behav         := overrideBehav
+            );
+qConv3_2Fwd := CONV3_2.oMotor_Rollers_Fwd;
+qConv3_2Rev := CONV3_2.oMotor_Rollers_Rev;
+qhydraMotor := CONV3_2.oMotor_Hydraulic;
+bDumpV_Delay(IN := CONV3_2.oValve_Dump, PT := t#100ms);
+qdumpvalve := bDumpV_Delay.Q;
+qConv3_2P2_Ret                      := CONV3_2.oValve_Bot_Ret;
+qConv3_2P4_Ret                      := CONV3_2.oValve_Bot_Ext;
+qConv3_2P3_Ret                      := CONV3_2.oValve_Side_Ret;
+qConv3_2P1_Ret                      := CONV3_2.oValve_Side_Ext;
+qConv3_2P4_Ext                      := CONV3_2.oValve_Pis_Ret;
+qConv3_2P3_Ext                      := CONV3_2.oValve_Pis_Ext;
+qConv3_2P2_Ext                      := CONV3_2.oValve_Top_Ret;
+qConv3_2P1_Ext                      := CONV3_2.oValve_Top_Ext;
+qConv3_2P5_Ret                      := CONV3_2.oValve_Tilt_Ret;
+qConv3_2P5_Ext                      := CONV3_2.oValve_Tilt_Ext;
+qConv3_2Light_Ind := CONV3_2.oLamp_Indication;
+
+hmi_3_2_motor_on := CONV3_2.oMotor_Rollers_Fwd OR CONV3_2.oMotor_Rollers_Rev;
+            
+(* Conveyor 3_3 *)
+CONV3_3     (   iButton_Go          := iConv3_3Go_S,
+                iButton_DirSel      := iConv3_3Dir_S OR iLine3Unload,   // Override
+                iButton_EStop       := iConv3_3EStop_S,
+                iEStop_Global       := NOT iSysEStop_K,
+                iPS1                := NOT iConv3_3PS1_S,
+                iPS2                := NOT iConv3_3PS2_S,
+                iVSD_Rollers_F      := VSD_OnDelay.Q AND NOT iConv3_3VSD_F,
+                iNeigh1             := CONV3_2.oNeigh2,
+                iNeigh2             := CONV3_4.oNeigh1,
+                xConv_Behav         := 1
+            );
+qConv3_3Fwd := CONV3_3.oMotor_Rollers_Fwd;
+qConv3_3Rev := CONV3_3.oMotor_Rollers_Rev;
+qConv3_3Light_Ind := CONV3_3.oLamp_Indication;
+
+hmi_3_3_motor_on := CONV3_3.oMotor_Rollers_Fwd OR CONV3_3.oMotor_Rollers_Rev;
+
+(* Conveyor 3_4 *)
+CONV3_4     (   iButton_Go          := iConv3_4Go_S,
+                iButton_DirSel      := iConv3_4Dir_S OR iLine3Unload,   // Override
+                iButton_EStop       := iConv3_4EStop_S,
+                iEStop_Global       := VSD_OnDelay.Q AND NOT iSysEStop_K,
+                iPS1                := NOT iConv3_4PS1_S,
+                iPS2                := NOT iConv3_4PS2_S,
+                iPSHome_Stop        := iConv3_4ProxHome_Stop,
+                iPSHome_Slow        := iConv3_4ProxHome_Slow,
+                iPSPos1_Slow        := iConv3_4ProxPos1_Slow,
+                iPSPos1_Stop        := iConv3_4ProxPos1_Stop,
+                iVSD_Rollers_F      := NOT iConv3_4VSD_F,
+                iVSD_TT_F           := NOT iConv3_4VSD_F_TT,
+                iNeigh1             := CONV3_3.oNeigh2,
+                iNeigh2             := CONV3_5.oNeigh1
+            );
+qConv3_4Fwd := CONV3_4.oMotor_Rollers_Fwd;
+qConv3_4Rev := CONV3_4.oMotor_Rollers_Rev;
+qConv3_4Fwd_TT := CONV3_4.oMotor_TT_Fwd AND NOT iConv3_4ProxPos1_Stop; // interlock. prevent TT from turning past limits
+qConv3_4Rev_TT := CONV3_4.oMotor_TT_Rev AND NOT iConv3_4ProxHome_Stop;
+qConv3_4Fast_TT := CONV3_4.oMotor_TT_Fast;
+qConv3_4Light_Ind := CONV3_4.oLamp_Indication;
+
+(* HMI Animation bits *)
+hmi_3_4_motor_on := CONV3_4.oMotor_Rollers_Fwd OR CONV3_4.oMotor_Rollers_Rev;
+hmi_3_4_home_vsd_f := CONV3_4.TT_Home AND CONV3_4.iVSD_Rollers_F;
+hmi_3_4_pos1_vsd_f := CONV3_4.TT_Pos1 AND CONV3_4.iVSD_Rollers_F;
+hmi_3_4_home_rollers_fwd := CONV3_4.TT_Home AND CONV3_4.oMotor_Rollers_Fwd;
+hmi_3_4_home_rollers_rev := CONV3_4.TT_Home AND CONV3_4.oMotor_Rollers_Rev;
+hmi_3_4_pos1_rollers_fwd := CONV3_4.TT_Pos1 AND CONV3_4.oMotor_Rollers_Fwd;
+hmi_3_4_pos1_rollers_rev := CONV3_4.TT_Pos1 AND CONV3_4.oMotor_Rollers_Rev;
+hmi_3_4_home_PS1 := CONV3_4.TT_Home AND CONV3_4.iPS1;
+hmi_3_4_home_PS2 := CONV3_4.TT_Home AND CONV3_4.iPS2;
+hmi_3_4_pos1_PS1 := CONV3_4.TT_Pos1 AND CONV3_4.iPS1;
+hmi_3_4_pos1_PS2 := CONV3_4.TT_Pos1 AND CONV3_4.iPS2;
+hmi_3_4_home_PS1_bot := hmi_3_4_home_PS1 AND (CONV3_4.dCurProdOrien = 0 OR CONV3_4.dCurProdOrien = 3);
+hmi_3_4_home_PS1_top := hmi_3_4_home_PS1 AND (CONV3_4.dCurProdOrien = 1 OR CONV3_4.dCurProdOrien = 2);
+hmi_3_4_home_PS2_bot := hmi_3_4_home_PS2 AND (CONV3_4.dCurProdOrien = 0 OR CONV3_4.dCurProdOrien = 3);
+hmi_3_4_home_PS2_top := hmi_3_4_home_PS2 AND (CONV3_4.dCurProdOrien = 1 OR CONV3_4.dCurProdOrien = 2);
+hmi_3_4_pos1_PS1_bot := hmi_3_4_pos1_PS1 AND (CONV3_4.dCurProdOrien = 1 OR CONV3_4.dCurProdOrien = 2);
+hmi_3_4_pos1_PS1_top := hmi_3_4_pos1_PS1 AND (CONV3_4.dCurProdOrien = 0 OR CONV3_4.dCurProdOrien = 3);
+hmi_3_4_pos1_PS2_bot := hmi_3_4_pos1_PS2 AND (CONV3_4.dCurProdOrien = 1 OR CONV3_4.dCurProdOrien = 2);
+hmi_3_4_pos1_PS2_top := hmi_3_4_pos1_PS2 AND (CONV3_4.dCurProdOrien = 0 OR CONV3_4.dCurProdOrien = 3);
+
+(* Conveyor 3_5 *)
+CONV3_5     (   iButton_Go          := iConv3_5Go_S,
+                iButton_DirSel      := iConv3_5Dir_S OR iLine3Unload,   // Override
+                iButton_EStop       := iConv3_5EStop_S,
+                iEStop_Global       := VSD_OnDelay.Q AND NOT iSysEStop_K,
+                iPS1                := NOT iConv3_5PS1_S,
+                iPS2                := NOT iConv3_5PS2_S,
+                iVSD_Rollers_F      := NOT iConv3_5VSD_F,
+                iNeigh1             := CONV3_4.oNeigh2,
+                iNeigh2             := CONV1_4.oNeigh4,
+                xConv_Behav         := 1
+            );
+qConv3_5Fwd := CONV3_5.oMotor_Rollers_Fwd;
+qConv3_5Rev := CONV3_5.oMotor_Rollers_Rev;
+qConv3_5Light_Ind := CONV3_5.oLamp_Indication;
+
+hmi_3_5_motor_on := CONV3_5.oMotor_Rollers_Fwd OR CONV3_5.oMotor_Rollers_Rev;
+
+END_FUNCTION_BLOCK

@@ -1,0 +1,505 @@
+FUNCTION_BLOCK fbConveyorBD
+TITLE = 'Bi-Directional Conveyor for HDEP Spotting line'
+VERSION : '2.0'
+KNOW_HOW_PROTECT
+AUTHOR : 'RF Brand'
+//******************************************************************************************//
+VAR_INPUT
+(* Physical Inputs *)
+    iButton_Go : BOOL;          // Button used to initiate product transport
+    iButton_DirSel : BOOL;      // 2-Way Fwd/Rev Switch indicating desired rollers dir
+    iButton_EStop : BOOL;       // Local EStop button
+    iEStop_Global : BOOL;       // EStop Condition due to safety system
+    iPS1, iPS2 : BOOL;          // Rectoflective optical sensors for sensing products
+    iVSD_Rollers_F : BOOL;      // Rollers VSD Fault Alarm signal
+(* Inter-Conveyor Messages *)
+    iNeigh1 : INT;                  //      2     ^
+    iNeigh2 : INT;                  //      |     |
+    //  0-Nothing                   //   3-[C]-4  ^
+    //  1-AbletoReceive             //      |     |
+    //  2-YouMaySend                //      1     ^
+    //  3-ReqtoSend
+    //  4-ProductCleared
+    //  5-SendingProduct
+    //  6-ProductReceived
+    //  7-ProductTooEarly
+    //  9-CancelTransaction
+(* Other *)
+    iManual_Mode_Req : BOOL;    // User Request Manual Control of conveyor
+(* Settings *)
+    xConv_Behav : INT;  (* SPECIFY CONVEYOR BEHAVIOUR: *)
+                        // 0-Basic 'Push to Go' Conveyor;
+                        // 1-Automatic Pass on Product without user
+    xSensor_offDelay : TIME := t#200ms; // Off-Delay time for photosensors
+END_VAR
+VAR_OUTPUT
+(* Physical Outputs *)
+    oMotor_Rollers_Fwd : BOOL;  // Standard Conveyor Rollers
+    oMotor_Rollers_Rev : BOOL;
+    oLamp_Indication : BOOL;    // Status light
+(* Inter-Conveyor Messages *)
+    oNeigh1 : INT; oNeigh2 : INT;   
+(* Alarms *)
+    oAlarmsOut : WORD;          // Used for passing messages and alarms to HMI
+    oAlarms AT oAlarmsOut : ARRAY[0..15] OF BOOL;
+(*  oAlarms[0]  ->  "EStop Button Pressed"
+    oAlarms[1]  ->  "Rollers VSD Fault"
+    oAlarms[2]  ->  "Go Button being kept pressed in"
+    oAlarms[3]  ->  "Momentary Obstruction: Photosensor broken and remade too fast"
+    oAlarms[4]  ->  "Cancel Receive Process: Prev Conv not Sending"
+    oAlarms[5]  ->  "Receive Timeout: "Product stuck on Conveyor"
+    oAlarms[6]  ->  "Obstruction on next Conv while Sending"
+    oAlarms[7]  ->  "Product not leaving while sending" *)
+END_VAR
+VAR
+(* FINITE STATE MACHINE FOR CONVEYOR*)
+    oldState : INT;                // NI -> Not Implemented
+    State : INT;            // 0-RESET;
+                            // 1-STANDBY;
+                            // 2-ABLETORECEIVE;     13-SENDTOOTHERPS;
+                            // 3-RECEIVING;
+                            // 4-RECEIVED(NI);      20-ESTOP;
+                            // 5-ABLETOSEND;        21-VSDFAULT;
+                            // 6-SENDING;           22-MANUAL;
+                            
+    intState : INT;    // Sub Statemachine used in some states
+    tTimer : SFB4;          // IEC On-Delay timers used for timing sequences
+(* Keep track of photosensors *)
+    tPS1_Debounce : SFB5;   // IEC Off-Delay Timer used for debouncing product sensor
+    tPS2_Debounce : SFB5;
+    // Check IF photosensor is momentarily broken AND remade in short TIME
+    tMomentary : SFB4; // Used to make alarm
+    Momentary_obstruction : BOOL; // This can happen due to vibration or hand
+    lastSensState : BOOL; // Keep track of photosensor state changes
+(* Handle and check Go button presses *)
+    tGoTime : SFB4;
+(* Manual Mode Control for HMI and Field Buttons *)
+    bM_HMI_Fwd : BOOL;
+    bM_HMI_Rev : BOOL;
+    bOld_Fwd : BOOL;
+    bOld_Rev : BOOL;
+(* Other *)
+    bReceivefrom1 : BOOL; // Flag to indicate what conv we receive from
+    bSendto2 : BOOL; // Flag indicate what conv we send to
+    dProdLocation : INT; // 0-Unloaded; 1-PS1 side; 2-PS2 side;
+END_VAR
+BEGIN
+(* Inputs processing *)
+tGoTime(IN := iButton_Go, PT := t#8s);
+oAlarms[2] := tGoTime.Q; // if Button is kept in longer than 8s it is an alarm
+tPS1_Debounce(IN := iPS1, PT := xSensor_offDelay); // Photosensor debounce
+tPS2_Debounce(IN := iPS2, PT := xSensor_offDelay); // Photosensor debounce
+
+(* Generate Momentary Obstruction Alarm *)
+IF tMomentary.Q THEN
+    Momentary_obstruction := false;
+END_IF;
+tMomentary(IN := Momentary_obstruction, PT := t#2s);
+oAlarms[3] := Momentary_obstruction;
+
+(* STATE MACHINE CONTROL FLOW START *)
+IF iEStop_Global THEN          // Emergency stop gets top priority in program
+    IF (State <> 20) THEN
+        State := 20;    // GOTO ESTOP
+    END_IF;
+ELSIF iVSD_Rollers_F THEN      // After that VSD Failure
+    IF (State <> 21) THEN
+        State := 21;    // GOTO VSDFAULT
+    END_IF;
+ELSIF iManual_Mode_Req THEN    // After that manual operation requests
+    IF (State <> 22) THEN
+        State := 22;    // GOTO MANUAL
+    END_IF;
+END_IF;
+CASE State OF
+    0 : // RESET
+        tTimer(IN := false);
+        oNeigh1 := 0; oNeigh2 := 0;
+        oAlarmsOut := w#16#0; // 0x0000;
+        oMotor_Rollers_Fwd := false;
+        oMotor_Rollers_Rev := false;
+        oLamp_Indication := false;
+        oldState := 0;
+        IF (tPS1_Debounce.Q OR tPS2_Debounce.Q) THEN
+            State := 1; // GOTO STANDBY
+        ELSE
+            State := 2; // GOTO ABLETORECEIVE
+            dProdLocation := 0;
+        END_IF;
+    1 : // STANDBY
+        IF oldState <> State THEN
+            intState := 0;
+            oldState := State;
+        END_IF;
+        oLamp_Indication := M0.3;
+        CASE intState OF
+            0 : IF (iButton_Go AND NOT tGoTime.Q) THEN
+                    intState := 1;
+                END_IF;
+            1 : IF tGoTime.Q THEN
+                    intState := 0;
+                ELSIF NOT iButton_Go THEN   // Want to make sure button is released
+                    IF tPS1_Debounce.Q AND NOT tPS2_Debounce.Q THEN
+                        IF iButton_DirSel THEN
+                            State := 13;
+                        ELSE
+                            State := 5; // GOTO ABLETOSEND
+                            dProdLocation := 1;
+                        END_IF;
+                    ELSIF tPS2_Debounce.Q AND NOT tPS1_Debounce.Q THEN
+                        IF iButton_DirSel THEN
+                            State := 5; // GOTO ABLETOSEND
+                            dProdLocation := 2;
+                        ELSE
+                            State := 13;
+                        END_IF;
+                    ELSIF NOT (tPS1_Debounce.Q OR tPS2_Debounce.Q) THEN // confirm no product on this conveyor
+                        State := 2; // GOTO ABLETORECEIVE
+                        dProdLocation := 0;
+                    END_IF;
+                    oLamp_Indication := false; // Instead of state exit
+                END_IF;
+        END_CASE;
+    2 : // ABLETORECEIVE
+        IF oldState <> State THEN
+            oNeigh1 := 1;
+            oNeigh2 := 1;
+            oLamp_Indication := true;
+            oldState := State;
+        END_IF;
+        IF (tPS1_Debounce.Q OR tPS2_Debounce.Q) THEN
+            State := 1;     // GOTO STANDBY
+        ELSIF (iNeigh1 = 3) THEN
+            bReceivefrom1 := true;
+            State := 3;     // GOTO RECEIVING
+        ELSIF (iNeigh2 = 3) THEN
+            bReceivefrom1 := false;
+            State := 3;     // GOTO RECEIVING
+        END_IF;
+        IF oldState <> State THEN
+            oNeigh1 := 0; oNeigh2 := 0;
+            oLamp_Indication := false;
+        END_IF;
+    3 : // RECEIVING
+        IF oldState <> State THEN
+            tTimer(IN := false);
+            intState := 0;
+            IF bReceivefrom1 THEN
+                oNeigh1 := 2;
+                oMotor_Rollers_Fwd := true;
+            ELSE
+                oNeigh2 := 2;
+                oMotor_Rollers_Rev := true;
+            END_IF;
+            oldState := State;
+        END_IF;
+        oLamp_Indication := M0.5;
+        CASE intState OF
+            0 : tTimer(IN := true, PT := t#1s);
+                IF tTimer.Q THEN                                // Prev conv did not send
+                    tTimer(IN := false);
+                    oNeigh1 := 9; oNeigh2 := 9;
+                    oAlarms[4] := true;
+                    intState := 10;
+                ELSIF ((iNeigh1 = 5) AND bReceivefrom1) OR      // Prev conv is sending
+                      ((iNeigh2 = 5) AND NOT bReceivefrom1) THEN
+                    tTimer(IN := false);
+                    oNeigh1 := 0; oNeigh2 := 0;
+                    intState := 1;
+                END_IF;
+            1 : IF (tPS2_Debounce.Q AND bReceivefrom1) OR       // Sensor set too early
+                   (tPS1_Debounce.Q AND NOT bReceivefrom1) THEN
+                    oNeigh1 := 7; oNeigh2 := 7;
+                    intState := 11;
+                ELSIF ((iNeigh1 = 4) AND bReceivefrom1) OR      // Prev conv is done
+                      ((iNeigh2 = 4) AND NOT bReceivefrom1) THEN    
+                    intState := 2;
+                END_IF;
+            2 : tTimer(IN := true, PT := t#15s);
+                IF tTimer.Q THEN                                // Product failed to arrive
+                    tTimer(IN := false);
+                    oAlarms[5] := true;
+                    intState := 10;
+                ELSIF (tPS2_Debounce.Q AND bReceivefrom1) OR    // Product has arrived
+                      (tPS1_Debounce.Q AND NOT bReceivefrom1) THEN
+                    tTimer(IN := false);
+                    oNeigh1 := 6; oNeigh2 := 6;
+                    oMotor_Rollers_Fwd := false;
+                    oMotor_Rollers_Rev := false;
+                    intState := 3;
+                END_IF;
+            3 : tTimer(IN := true, PT := t#550ms);
+                IF (NOT iPS2 AND bReceivefrom1) OR              // Suspect obstruction
+                   (NOT iPS1 AND NOT bReceivefrom1) THEN
+                    Momentary_obstruction := true;
+                    State := 1; // GOTO STANDBY
+                ELSIF tTimer.Q THEN                             // Assume product has arrived
+                    IF bReceivefrom1 AND iPS2 THEN
+                        dProdLocation := 2;
+                    ELSIF NOT bReceivefrom1 AND iPS1 THEN
+                        dProdLocation := 1;
+                    END_IF;
+                    State := 5; // GOTO ABLETOSEND
+                END_IF;
+           10 : tTimer(IN := true, PT := t#2s);     // Wait
+                oMotor_Rollers_Fwd := false; oMotor_Rollers_Rev := false;
+                IF tTimer.Q THEN
+                    State := 1; // GOTO STANDBY
+                END_IF;
+           11 : tTimer(IN := true, PT := t#550ms);  // Early Receive. Error by Prev Conv.
+                oMotor_Rollers_Fwd := false; oMotor_Rollers_Rev := false;
+                IF (NOT iPS2 AND bReceivefrom1) OR
+                   (NOT iPS1 AND NOT bReceivefrom1) THEN
+                    Momentary_obstruction := true;
+                    State := 1; // GOTO STANDBY
+                ELSIF tTimer.Q THEN
+                    State := 1; // GOTO STANDBY
+                END_IF;
+        END_CASE;
+        IF ((iNeigh1 = 9) AND bReceivefrom1) OR
+           ((iNeigh2 = 9) AND NOT bReceivefrom1) THEN
+            State := 1; // GOTO STANDBY
+        END_IF;
+        IF oldState <> State THEN
+            oNeigh1 := 0; oNeigh2 := 0;
+            oAlarms[4] := false;
+            oAlarms[5] := false;
+            oMotor_Rollers_Fwd := false;
+            oMotor_Rollers_Rev := false;
+            oLamp_Indication := false;
+        END_IF;
+    5 : // ABLETOSEND
+        IF oldState <> State THEN
+            intState := 0;
+            oLamp_Indication := true;
+            oldState := State;
+        END_IF;
+        IF (dProdLocation = 1) AND iButton_DirSel THEN
+            State := 13;
+        ELSIF (dProdLocation = 2) AND NOT iButton_DirSel THEN
+            State := 13;
+        END_IF;
+        IF (intState = 0) AND (State = 5) AND (((xConv_Behav=0) AND iButton_Go AND NOT tGoTime.Q) OR xConv_Behav=1) THEN
+            IF (iButton_DirSel AND (iNeigh2 = 1)) THEN
+                bSendto2 := true;
+                intState := 1;
+            ELSIF (NOT iButton_DirSel AND (iNeigh1 = 1)) THEN
+                bSendto2 := false;
+                intState := 1;
+            END_IF;
+        END_IF;
+        IF NOT (tPS1_Debounce.Q OR tPS2_Debounce.Q) THEN
+            State := 1; // GOTO STANDBY
+        ELSE CASE intState OF
+            0 : oNeigh1 := 0; oNeigh2 := 0;
+            1 : IF tGoTime.Q THEN
+                    intState := 0;
+                ELSIF NOT iButton_Go THEN
+                    tTimer(IN := false);
+                    intState := 2;
+                END_IF;
+            2 : tTimer(IN := true, PT := t#1s);
+                IF bSendto2 THEN
+                    oNeigh2 := 3;
+                ELSE
+                    oNeigh1 := 3;
+                END_IF;
+                IF tTimer.Q THEN
+                    tTimer(IN := false);
+                    intState := 0;
+                ELSIF (bSendto2 AND (iNeigh2 = 2)) OR
+                      (NOT bSendto2 AND (iNeigh1 = 2)) THEN
+                    State := 6;    // GOTO SENDING
+                END_IF;
+        END_CASE; 
+        END_IF;
+        IF oldState <> State THEN
+            oNeigh1 := 0; oNeigh2 := 0;
+            oLamp_Indication := false;
+        END_IF;
+    6 : // SENDING
+        IF oldState <> State THEN
+            tTimer(IN := false);
+            intState := 0;
+            IF bSendto2 THEN
+                oNeigh2 := 5;
+                oMotor_Rollers_Fwd := true;
+            ELSE
+                oNeigh1 := 5;
+                oMotor_Rollers_Rev := true;
+            END_IF;
+            lastSensState := false;
+            oldState := State;
+        END_IF;
+        oLamp_Indication := M0.5;
+        CASE intState OF
+            0 : tTimer(IN := true, PT := t#25s);
+                IF tTimer.Q THEN                        // Product not leaving
+                    tTimer(IN := false);
+                    IF bSendto2 THEN
+                        oNeigh2 := 9;
+                    ELSE
+                        oNeigh1 := 9;
+                    END_IF;
+                    oAlarms[7] := true;
+                    intState := 10;
+                ELSIF (bSendto2 AND (iNeigh2 = 7)) OR   // Next Conv reports obstruction
+                      (NOT bSendto2 AND (iNeigh1 = 7)) THEN
+                    tTimer(IN := false);
+                    oAlarms[6] := true;
+                    intState := 10;
+                ELSIF (bSendto2 AND lastSensState AND NOT tPS2_Debounce.Q) THEN // Product has left the Conv
+                    tTimer(IN := false);
+                    oNeigh2 := 4;
+                    intState := 1;
+                ELSIF (NOT bSendto2 AND lastSensState AND NOT tPS1_Debounce.Q) THEN
+                    tTimer(IN := false);
+                    oNeigh1 := 4;
+                    intState := 1;
+                END_IF;
+                IF (tTimer.ET >= t#20s) THEN // Product taking too long to leave
+                    oMotor_Rollers_Fwd := false;
+                    oMotor_Rollers_Rev := false;
+                END_IF;
+            1 : tTimer(IN := true, PT := t#3s);         // Keep on to clear product
+                IF tTimer.Q OR (iNeigh2 = 6) OR (iNeigh1 = 6) THEN
+                    State := 2; // GOTO ABLETORECEIVE
+                END_IF;
+           10 : tTimer(IN := true, PT := t#2s);
+                oMotor_Rollers_Fwd := false; oMotor_Rollers_Rev:= false;
+                IF tTimer.Q THEN
+                    State := 1; // GOTO STANDBY
+                END_IF;
+        END_CASE;
+        IF bSendto2 THEN
+            lastSensState := tPS2_Debounce.Q;
+        ELSE
+            lastSensState := tPS1_Debounce.Q;
+        END_IF;
+        IF oldState <> State THEN
+            oNeigh1 := 0;
+            oNeigh2 := 0;
+            oAlarms[6] := false;
+            oAlarms[7] := false;
+            oMotor_Rollers_Fwd := false;
+            oMotor_Rollers_Rev := false;
+            oLamp_Indication := false;
+        END_IF;
+   13 : // SEND TO OTHER PS
+        IF oldState <> State THEN
+            tTimer(IN := false);
+            intState := 0;
+            IF iButton_DirSel THEN
+                oMotor_Rollers_Fwd := true;
+            ELSE
+                oMotor_Rollers_Rev := true;
+            END_IF;
+            oldState := State;
+        END_IF;
+        CASE intState OF
+            0 : tTimer(IN := true, PT := t#15s);
+                IF oMotor_Rollers_Fwd THEN
+                    IF tTimer.Q THEN
+                        intState := 10;
+                    ELSIF tPS2_Debounce.Q THEN
+                        tTimer(IN := false);
+                        oMotor_Rollers_Fwd := false;
+                        intState := 1;
+                    END_IF;    
+                ELSIF oMotor_Rollers_Rev THEN
+                    IF tTimer.Q THEN
+                        intState := 10;
+                    ELSIF tPS1_Debounce.Q THEN
+                        tTimer(IN := false);
+                        oMotor_Rollers_Rev := false;
+                        intState := 2;
+                    END_IF;
+                END_IF;
+            1 : tTimer(IN := true, PT := t#300ms);
+                IF tTimer.Q THEN
+                    IF NOT iPS1 THEN
+                        dProdLocation := 2;
+                        State := 5; // GOTO ABLETOSEND
+                    ELSE
+                        State := 1; // GOTO STANDBY
+                    END_IF;
+                END_IF;
+            2 : tTimer(IN := true, PT := t#300ms);
+                IF tTimer.Q THEN
+                    IF NOT iPS2 THEN
+                        dProdLocation := 1;
+                        State := 5; // GOTO ABLETOSEND
+                    ELSE
+                        State := 1; // GOTO STANDBY
+                    END_IF;
+                END_IF;
+           10 : tTimer(IN := true, PT := t#2s);
+                oMotor_Rollers_Fwd := false; oMotor_Rollers_Rev := false;
+                oLamp_Indication := M0.1;
+                IF tTimer.Q THEN
+                    State := 1; // GOTO STANDBY
+                END_IF;
+        END_CASE;
+        IF oldState <> State THEN
+            oMotor_Rollers_Fwd := false;
+            oMotor_Rollers_Rev := false;
+            oLamp_Indication := false;
+        END_IF;
+   20 : // ESTOP
+        IF oldState <> State THEN
+            oMotor_Rollers_Fwd := false;
+            oMotor_Rollers_Rev := false;
+            oldState := State;
+        END_IF;
+        oAlarms[0] := iButton_EStop;
+        IF iButton_EStop THEN
+            oLamp_Indication := M0.2;
+        ELSE
+            oLamp_Indication := M0.5;
+        END_IF;
+        IF NOT iEStop_Global THEN
+            State := 0; // GOTO RESET
+        END_IF;
+   21 : // VSDFAULT
+        oAlarms[1] := true;
+        IF oldState <> State THEN
+            oNeigh1 := 9;
+            oNeigh2 := 9;
+            oldState := State;
+        END_IF;
+        IF NOT iVSD_Rollers_F THEN
+            State := 0; // GOTO RESET
+        END_IF;
+   22 : // MANUAL
+        IF oldState <> State THEN
+            oNeigh1 := 0;
+            oNeigh2 := 0;
+            bM_HMI_Fwd := false;
+            bM_HMI_Rev := false;
+            oMotor_Rollers_Fwd := false;
+            oMotor_Rollers_Rev := false;
+            oldState := State;
+        END_IF;
+        oLamp_Indication := M0.7;
+        IF oMotor_Rollers_Fwd AND NOT bOld_Fwd THEN // HMI control
+            bM_HMI_Fwd := true;
+        ELSIF bOld_Fwd AND NOT oMotor_Rollers_Fwd THEN
+            bM_HMI_Fwd := false;
+        END_IF;
+        IF oMotor_Rollers_Rev AND NOT bOld_Rev THEN
+            bM_HMI_Rev := true;
+        ELSIF bOld_Rev AND NOT oMotor_Rollers_Rev THEN
+            bM_HMI_Rev := false;
+        END_IF;
+        oMotor_Rollers_Fwd := bM_HMI_Fwd OR (iButton_Go AND NOT tGoTime.Q AND iButton_DirSel);
+        oMotor_Rollers_Rev := bM_HMI_Rev OR (iButton_Go AND NOT tGoTime.Q AND NOT iButton_DirSel);
+        bOld_Fwd := oMotor_Rollers_Fwd;
+        bOld_Rev := oMotor_Rollers_Rev;
+        IF oMotor_Rollers_Fwd OR oMotor_Rollers_Rev THEN
+            oLamp_Indication := M0.1;
+        END_IF;
+        IF NOT iManual_Mode_Req THEN
+            State := 0; // Goto RESET
+        END_IF;
+END_CASE;
+END_FUNCTION_BLOCK

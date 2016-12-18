@@ -1,0 +1,12 @@
+(* UWE MEYER OLD PROGRAM *)
+//AF - HDEP - FC10 1.9
+//wont compile here. STL source file wont compile with SCL control file
+//so compile manually. There are also FBs and FCs that do not have source!
+
+(* NEW PRE- LEAK TESTER LINE PROGRAM *)
+fbConveyor      // Normal single direction conveyor. (Used: 1.1-1.3 & 2.1-2.6)
+fbConveyorBD    // Special bi-directional conveyor. (Used: 3.1,3.3,3.5)
+fbTTAdvanced    // 4-way Turntable in front of leaktester. (Used: 1.4)
+fbTTNew         // Special bi-directional TT. (Used: 3.4)
+fbTilting       // Tilting station with hydrapack. (Used: 3.2)
+fbMainProgram   // Main control program
