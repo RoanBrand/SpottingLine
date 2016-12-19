@@ -50,6 +50,9 @@ TITLE =Device Control
 //Rev. 1.9 (Roan Brand, 10/09/2015):
 //Remove conveyors 1-4 & TT 1. This file will now only control conveyors after the DMC
 //The complete line before the Leak Tester will be an independant program running on same PLC
+//Edit (Roan Brand, 18/12/2016):
+//Take out Conveyor 1_11 and put between 1_7 and 1_8 as an extra inspection station, linking 1_10 to 1_12.
+//Add reject conveyor logic changes implemented by Frank.
 AUTHOR : UMTM
 NAME : DevCntrl
 VERSION : 1.9
@@ -94,8 +97,11 @@ TITLE =Conveyor 1_5 (Class: Conveyor BDSS)
       AN    I      8.0; 
       S     M     10.1; 
       A     I      8.2; 
-      A     Q      1.2; 
-      R     M     10.1; 
+      A     Q      1.2;
+      O     Q      1.1;
+       
+      R     M     10.1;
+      R     M     10.2; 
 
       A     I      8.2; 
       A     I      8.0; 
@@ -230,7 +236,7 @@ TITLE =Conveyor 1_6 (Class: Conveyor UDSS)
       =     #bFlagLoadPermIn; 
 
       A     DB13.DBX    3.5; 
-      A     I      8.5; 
+      A     I      8.5; // 1.6-PS
       AN    DB40.DBX    2.2; 
       =     #bFlagUnloadPermIn; 
 
@@ -266,13 +272,12 @@ TITLE =Conveyor 1_7 (Class: Conveyor BDSS)
       A     DB12.DBX    3.4; 
       AN    I      9.3; 
       AN    DB40.DBX    2.2; 
-      =     #bFlagFwdLoadPermIn; 
-
-      A     DB14.DBX    2.5; 
-      A     I      2.5; 
-      A     I      9.3; 
+      =     #bFlagFwdLoadPermIn;
+      
+      A     DB30.DBX    3.5; 
+      A     I      9.3; // 1.7-PS
       AN    DB40.DBX    2.2; 
-      =     #bFlagFwdUnloadPermIn; 
+      =     #bFlagFwdUnloadPermIn;
 
       CALL FB    11 , DB    13 (
            bEnable                  := DB40.DBX    2.3,
@@ -293,6 +298,49 @@ TITLE =Conveyor 1_7 (Class: Conveyor BDSS)
            bVSDFwdEnable            := Q      2.4,
            bVSDRevEnable            := Q      2.5,
            bIndicationLight         := Q      5.5,
+           wHMIMode                 := DB40.DBW    4);
+           
+NETWORK
+TITLE =Conveyor 1_11 (Class: Conveyor BDSS)
+
+      CALL SFB    5 , DB   54 (
+           IN                       := I     10.5,
+           PT                       := T#5S,
+           Q                        := #bFlagConv1_11ProdSensor);
+           
+      A     I      10.5; 
+      =     #bFlagUnloadReqCond;
+           
+      A     DB13.DBX    3.6; 
+      AN    I      10.5; 
+      AN    DB40.DBX    2.2; 
+      =     #bFlagFwdLoadPermIn;
+      
+      A     DB14.DBX    2.5; 
+      A     I      3.7; 
+      A     I      10.5; 
+      AN    DB40.DBX    2.2; 
+      =     #bFlagFwdUnloadPermIn;
+
+      CALL FB    11 , DB    30 (
+           bEnable                  := DB40.DBX    2.3,
+           bEStopLine               := I      3.0,
+           bEStopConveyor           := I      1.2,
+           bIndexButton             := I      3.7,
+           bProductSensor           := #bFlagConv1_11ProdSensor,
+           bStopInterlock           := TRUE,
+           bVSDFault                := I      5.7,
+           bIOFault                 := FALSE,
+           bUnloadReqCond           := #bFlagUnloadReqCond,
+           bFwdLoadPermIn           := #bFlagFwdLoadPermIn,
+           bFwdUnloadPermIn         := #bFlagFwdUnloadPermIn,
+           bRevLoadPermIn           := FALSE,
+           bRevUnloadPermIn         := FALSE,
+           bRunReqIn                := DB13.DBX    3.6,
+           bFaultReset              := DB40.DBX    2.2,
+           bVSDFwdEnable            := Q      3.6,
+           //bVSDRevEnable            := ,
+           bIndicationLight         := Q      6.1,
            wHMIMode                 := DB40.DBW    4);
 
 NETWORK
@@ -423,53 +471,14 @@ TITLE =Conveyor 1_10 (Class: Dip Tank)
            bROVSDFastEnable         := Q      3.5,
            wHMIMode                 := DB40.DBW    4);
 
+      // Diptank solenoid clamp
       A(    ; 
       L     DB27.DBW    8; 
       L     2; 
       >=I   ; 
       )     ; 
-      =     Q      6.5; 
-NETWORK
-TITLE =Conveyor 1_11 (Class: Conveyor UDSS)
-
-      CALL SFB    5 , DB   54 (
-           IN                       := I     10.5,
-           PT                       := T#3S,
-           Q                        := #bFlagConv1_11ProdSensor);
-
-      A     I      3.7; 
-      AN    I     10.5; 
-      A     I     11.0; 
-      A(    ; 
-      O     DB16.DBX    6.2; 
-      O     DB16.DBX    6.5; 
-      )     ; 
-      AN    DB40.DBX    2.2; 
-      =     #bFlagLoadPermIn; 
-      =     #bFlagRunReqIn; 
-
-      A     DB18.DBX    3.3; 
-      AN    DB40.DBX    2.2; 
-      =     #bFlagUnloadPermIn; 
-
-      CALL FB    10 , DB    17 (
-           bEnable                  := DB40.DBX    2.3,
-           bEStopLine               := I      3.0,
-           bEStopConveyor           := I      1.2,
-           bIndexButton             := I      3.7,
-           bProductSensor           := #bFlagConv1_11ProdSensor,
-           bStopInterlock           := TRUE,
-           bVSDFault                := I      5.7,
-           bIOFault                 := FALSE,
-           bUnloadReqCond           := TRUE,
-           bLoadPermIn              := #bFlagLoadPermIn,
-           bUnloadPermIn            := #bFlagUnloadPermIn,
-           bRunReqIn                := #bFlagRunReqIn,
-           bFaultReset              := DB40.DBX    2.2,
-           bVSDEnable               := Q      3.6,
-           bIndicationLight         := Q      6.1,
-           wHMIMode                 := DB40.DBW    4);
-
+      =     Q      6.5;
+      
 NETWORK
 TITLE =Conveyor 1_12 (Class: Conveyor UDSS)
 
@@ -477,11 +486,17 @@ TITLE =Conveyor 1_12 (Class: Conveyor UDSS)
            IN                       := I     10.6,
            PT                       := T#3S,
            Q                        := #bFlagConv1_12ProdSensor);
-
-      A     DB17.DBX    3.4; 
+      
+      A     I      4.0; 
       AN    I     10.6; 
+      A     I     11.0; 
+      A(    ; 
+      O     DB16.DBX    6.2; 
+      O     DB16.DBX    6.5; 
+      )     ; 
       AN    DB40.DBX    2.2; 
       =     #bFlagLoadPermIn; 
+      =     #bFlagRunReqIn;
 
       A     DB19.DBX    3.3; 
       AN    DB40.DBX    2.2; 
@@ -499,7 +514,7 @@ TITLE =Conveyor 1_12 (Class: Conveyor UDSS)
            bUnloadReqCond           := TRUE,
            bLoadPermIn              := #bFlagLoadPermIn,
            bUnloadPermIn            := #bFlagUnloadPermIn,
-           bRunReqIn                := DB17.DBX    3.4,
+           bRunReqIn                := #bFlagRunReqIn,
            bFaultReset              := DB40.DBX    2.2,
            bVSDEnable               := Q      3.7,
            bIndicationLight         := Q      6.2,
